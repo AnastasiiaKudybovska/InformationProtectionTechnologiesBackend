@@ -20,8 +20,3 @@ class LinearCongruentialGenerator:
                 return period
             visited[num] = i
         return -1
-
-    def write_to_file(self):
-        with open('linear_congruential_generated_sequence.txt', "w") as file:
-            for x in self.rand_numbers:
-                file.write(str(x) + "\n")
