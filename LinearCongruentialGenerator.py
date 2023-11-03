@@ -1,5 +1,5 @@
 class LinearCongruentialGenerator:
-    def __init__(self, n, x0, m, a, c):
+    def __init__(self, n, x0=7, m=2**23 - 1, a=10 ** 3, c=377):
         self.n = n
         self.x = x0
         self.m = m
@@ -11,6 +11,7 @@ class LinearCongruentialGenerator:
         for _ in range(self.n):
             self.x = (self.a * self.x + self.c) % self.m
             self.rand_numbers.append(self.x)
+        return self.rand_numbers
 
     def find_period(self):
         visited = {}

@@ -1,7 +1,12 @@
+import base64
+from distutils.file_util import write_file
 import os
-from flask import Blueprint, jsonify, request, send_file
+import uuid
+from werkzeug.utils import secure_filename
+from flask import Blueprint, jsonify, make_response, request, send_file
 from LinearCongruentialGenerator import LinearCongruentialGenerator
 from MD5 import MD5
+from RC5 import RC5
 from config import ConfigDataLinearCongurentialGenerator
 from resp_errors import errors
 
@@ -9,6 +14,7 @@ app_blueprint = Blueprint('app_routes', __name__)
 
 generator = None
 md5 = None
+rc5 = None
 
 @app_blueprint.route('/generate_pseudo_random_sequence', methods=['POST'])
 def generate_pseudo_random_sequence():
@@ -128,34 +134,115 @@ def md5_check_hash_for_file():
         return jsonify("The hash is incorrect. File has been modified."), 200
 
 
+@app_blueprint.route('/rc5_encode_text', methods=['POST'])
+def rc5_encrypt_text():
+    global rc5
+    try:
+        user_key = str(request.json.get('key'))
+        text = str(request.json.get('text'))
+    except (ValueError, TypeError):
+        return errors.bad_request
+    md5 = MD5()
+    hash = md5.hash_text_md5(user_key)
+    key = md5.hash_text_md5(hash)
+    key = (key + hash).encode('utf-8')
+
+    rc5 = RC5(key)
+    data = text.encode('utf-8')
+    res = rc5.rc5_encode_data(data)
+    rc5.enc = res
+    # print(rc5.enc)
+    res_base64 = base64.b64encode(res).decode('utf-8')
+    return jsonify(res_base64)
+
+
+@app_blueprint.route('/rc5_encode_file', methods=['POST'])
+def rc5_encrypt_file():
+    global rc5
+    try:
+        user_key = str(request.form.get('key'))
+        file = request.files['selected_file']    
+        if file.filename != '':
+            original_filename = secure_filename(file.filename)
+            file.save(original_filename)  # Зберегти файл з оригінальним іменем
+    except (ValueError, TypeError):
+        return errors.bad_request
+
+    with open(original_filename, 'rb') as file:
+        file_data = file.read()
+
+    md5 = MD5()
+    hash = md5.hash_text_md5(user_key)
+    key = md5.hash_text_md5(hash)
+    key = (key + hash).encode('utf-8')
+    rc5 = RC5(key)
+    res = rc5.rc5_encode_data(file_data)
+    
+
+    with open("code_" + original_filename, 'wb') as file2:
+        file2.write(res)
+
+    path = "code_" + original_filename
+
+    os.remove(original_filename)
+    print(send_file(path, as_attachment=True))
+
+    return send_file(path, as_attachment=True)
 
 
 
 
 
+@app_blueprint.route('/rc5_decode_text', methods=['POST'])
+def rc5_decrypt_text():
+    global rc5
+    try:
+        user_key = str(request.json.get('key'))
+        text = str(request.json.get('text'))
+    except (ValueError, TypeError):
+        return errors.bad_request
+    md5 = MD5()
+    hash = md5.hash_text_md5(user_key)
+    key = md5.hash_text_md5(hash)
+    key = (key + hash).encode('utf-8')
+    if len(text) != 0: 
+        try: 
+            data = base64.b64decode(text)
+        except:
+            return errors.bad_request       
+    elif rc5.enc != None: data = rc5.enc
+    else: return jsonify(str(''))
+    rc5.set_key(key)
+    res = rc5.rc5_decode_data(data)
+    return jsonify(str(res))
 
+@app_blueprint.route('/rc5_decode_file', methods=['POST'])
+def rc5_decrypt_file():
+    global rc5
+    try:
+        user_key = str(request.form.get('key'))
+        file = request.files['selected_file']    
+        if file.filename != '':
+            # unique_filename = str(uuid.uuid4())
+            original_filename = secure_filename(file.filename)
+            file.save(original_filename)
+    except (ValueError, TypeError):
+        return errors.bad_request
 
+    with open(original_filename, 'rb') as file:
+        file_data = file.read()
 
+    md5 = MD5()
+    hash = md5.hash_text_md5(user_key)
+    key = md5.hash_text_md5(hash)
+    key = (key + hash).encode('utf-8')
+    rc5 = RC5(key)
+    res = rc5.rc5_decode_data(file_data)
+    file_extension = os.path.splitext(original_filename)[-1]
+    with open("uncode_" + original_filename[5:], 'wb') as file2:
+        file2.write(res)
+    response = send_file('uncode_' + original_filename[5:], as_attachment=True)
 
-# @app_blueprint.route('/md5_check_integrity', methods=['GET'])
-# def md5_check_integrity():
-#     global md5
-#     if md5 is None:
-#         return jsonify({'error': {'code': 404, 'message': "MD5 is not initialized"}})
-#     try:    
-#         path = 'content_for_hash.txt'  
-#         # if isinstance(md5.content_for_hash, bytes):
-#         #     with open(path, "wb") as file:
-#         #         file.write(md5.content_for_hash)
-#         # else:
-#         with open(path, "w") as file:
-#             file.write(md5.content_for_hash)
-#         hash_text = md5.md_hash
-#         md5 = MD5()
-#         hash_file_with_text = md5.md5_file(path)
-#         if (hash_text != hash_file_with_text):
-#             with open(path, "w") as file:
-#                 file.write("Broken file")
-#         return send_file(path, as_attachment=True)
-#     except Exception as e:
-#         return jsonify({"error": {"code": 500, "message": f"Error writing to file: {str(e)}"}})
+    os.remove(original_filename)
+    return response
+
