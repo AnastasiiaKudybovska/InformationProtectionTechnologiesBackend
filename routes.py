@@ -1,12 +1,17 @@
 import base64
 from distutils.file_util import write_file
+from io import BytesIO
 import os
+import tempfile
+import time
 import uuid
+import zipfile
 from werkzeug.utils import secure_filename
 from flask import Blueprint, jsonify, make_response, request, send_file
 from LinearCongruentialGenerator import LinearCongruentialGenerator
 from MD5 import MD5
 from RC5 import RC5
+from RSA import RivestShamirAdleman
 from config import ConfigDataLinearCongurentialGenerator
 from resp_errors import errors
 
@@ -15,6 +20,7 @@ app_blueprint = Blueprint('app_routes', __name__)
 generator = None
 md5 = None
 rc5 = None
+rsa = None
 
 @app_blueprint.route('/generate_pseudo_random_sequence', methods=['POST'])
 def generate_pseudo_random_sequence():
@@ -143,18 +149,22 @@ def rc5_encrypt_text():
     except (ValueError, TypeError):
         return errors.bad_request
     md5 = MD5()
+    start_time = time.time()
     hash = md5.hash_text_md5(user_key)
     key = md5.hash_text_md5(hash)
     key = (key + hash).encode('utf-8')
-
-    rc5 = RC5(key)
+    rc5 = RC5(key) 
     data = text.encode('utf-8')
     res = rc5.rc5_encode_data(data)
     rc5.enc = res
     # print(rc5.enc)
     res_base64 = base64.b64encode(res).decode('utf-8')
-    return jsonify(res_base64)
-
+    end_time = time.time()
+    rc5.time = end_time - start_time
+    return jsonify({
+        'encrypted_text': res_base64,
+        'encryption_time': rc5.time
+    })
 
 @app_blueprint.route('/rc5_encode_file', methods=['POST'])
 def rc5_encrypt_file():
@@ -164,7 +174,7 @@ def rc5_encrypt_file():
         file = request.files['selected_file']    
         if file.filename != '':
             original_filename = secure_filename(file.filename)
-            file.save(original_filename)  # Зберегти файл з оригінальним іменем
+            file.save(original_filename) 
     except (ValueError, TypeError):
         return errors.bad_request
 
@@ -172,26 +182,25 @@ def rc5_encrypt_file():
         file_data = file.read()
 
     md5 = MD5()
+    start_time = time.time()
     hash = md5.hash_text_md5(user_key)
     key = md5.hash_text_md5(hash)
     key = (key + hash).encode('utf-8')
     rc5 = RC5(key)
     res = rc5.rc5_encode_data(file_data)
-    
-
     with open("code_" + original_filename, 'wb') as file2:
         file2.write(res)
-
+    end_time = time.time()
     path = "code_" + original_filename
-
     os.remove(original_filename)
-    print(send_file(path, as_attachment=True))
-
+    # print(send_file(path, as_attachment=True))
+    rc5.time =  end_time - start_time
     return send_file(path, as_attachment=True)
 
-
-
-
+@app_blueprint.route('/rc5_crypt_file_time', methods=['GET'])
+def rc5_crypt_file_time():
+    global rc5
+    return jsonify(rc5.time)
 
 @app_blueprint.route('/rc5_decode_text', methods=['POST'])
 def rc5_decrypt_text():
@@ -202,6 +211,7 @@ def rc5_decrypt_text():
     except (ValueError, TypeError):
         return errors.bad_request
     md5 = MD5()
+    start_time = time.time()
     hash = md5.hash_text_md5(user_key)
     key = md5.hash_text_md5(hash)
     key = (key + hash).encode('utf-8')
@@ -214,7 +224,12 @@ def rc5_decrypt_text():
     else: return jsonify(str(''))
     rc5.set_key(key)
     res = rc5.rc5_decode_data(data)
-    return jsonify(str(res))
+    end_time = time.time()
+    rc5.time = end_time - start_time
+    return jsonify({
+        'decrypted_text': str(res),
+        'decryption_time': rc5.time
+    })
 
 @app_blueprint.route('/rc5_decode_file', methods=['POST'])
 def rc5_decrypt_file():
@@ -231,8 +246,8 @@ def rc5_decrypt_file():
 
     with open(original_filename, 'rb') as file:
         file_data = file.read()
-
     md5 = MD5()
+    start_time = time.time()
     hash = md5.hash_text_md5(user_key)
     key = md5.hash_text_md5(hash)
     key = (key + hash).encode('utf-8')
@@ -241,8 +256,134 @@ def rc5_decrypt_file():
     file_extension = os.path.splitext(original_filename)[-1]
     with open("uncode_" + original_filename[5:], 'wb') as file2:
         file2.write(res)
+    end_time = time.time()
+    rc5.time = end_time - start_time
     response = send_file('uncode_' + original_filename[5:], as_attachment=True)
-
     os.remove(original_filename)
     return response
 
+
+### lab 4 
+
+def zip_files(*files):
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as zip_archive:
+        for file in files:
+            zip_archive.write(file)
+    zip_buffer.seek(0)
+    return zip_buffer.read()
+
+@app_blueprint.route('/rsa_generate_keys', methods=['POST'])
+def generate_keys():
+    try:
+        key_size = int(request.json.get('keySize', 1024))
+    except (ValueError, TypeError):
+        return errors.bad_request 
+    rsa = RivestShamirAdleman(key_size)
+    private_key, public_key = rsa.generate_keys()
+    with open("private_key.pem", "wb") as file:
+        file.write(private_key)
+    with open("public_key.pem", "wb") as file1:
+        file1.write(public_key)
+
+    response = make_response(zip_files("public_key.pem", "private_key.pem"))
+    response.headers["Content-Disposition"] = "attachment; filename=RSA_keys.zip"
+    response.headers["Content-Type"] = "application/zip"
+    return response
+
+@app_blueprint.route('/rsa_encrypt_text', methods=['POST'])
+def rsa_encrypt_text():
+    public_key_file = request.files['public_key'] 
+    text_encrypt = request.form.get('text_encrypt')
+    if not public_key_file or public_key_file.filename == '':
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        public_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            public_key = file.read()
+    rsa = RivestShamirAdleman()
+    start_time = time.time()
+    encrypted_text = rsa.encrypt_text(text_encrypt, public_key)
+    end_time = time.time()
+    return jsonify({
+        'encrypted_text': encrypted_text,
+        'encryption_time': end_time - start_time
+    })
+
+@app_blueprint.route('/rsa_encrypt_file', methods=['POST'])
+def rsa_encrypt_file():
+    public_key_file = request.files['public_key'] 
+    file_encrypt = request.files['file_encrypt']
+    if not public_key_file or public_key_file.filename == '' or not file_encrypt or file_encrypt.filename == "":
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        public_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            public_key = file.read()
+
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file_encrypt:
+        file_encrypt.save(temp_file_encrypt.name)
+        with open(temp_file_encrypt.name, 'rb') as file2:
+            data_encrypt = file2.read()
+    global rsa
+    rsa = RivestShamirAdleman()
+    start_time = time.time()
+    encrypted_file_data = rsa.encrypt_file(data_encrypt, public_key)
+    path = "encrypted_" + file_encrypt.filename
+    with open(path, 'wb') as output_file:
+        output_file.write(encrypted_file_data)
+    end_time = time.time()
+    rsa.time = end_time - start_time
+    response = send_file(path, as_attachment=True)
+    # response.headers['x-encryption-time'] = str(end_time - start_time)
+    return response
+
+@app_blueprint.route('/rsa_crypt_file_time', methods=['GET'])
+def rsa_crypt_file_time():
+    global rsa
+    return jsonify(rsa.time)
+
+@app_blueprint.route('/rsa_decrypt_text', methods=['POST'])
+def rsa_decrypt_text():
+    private_key_file = request.files['private_key'] 
+    text_decrypt = request.form.get('text_decrypt')
+    if not private_key_file or private_key_file.filename == '':
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        private_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            private_key = file.read()
+    rsa = RivestShamirAdleman()
+    start_time = time.time()
+    decrypted_text = rsa.decrypt_text(text_decrypt, private_key)
+    end_time = time.time()
+    return jsonify({
+        'decrypted_text': decrypted_text,
+        'decryption_time': end_time - start_time
+    })
+
+@app_blueprint.route('/rsa_decrypt_file', methods=['POST'])
+def rsa_decrypt_file():
+    print("start")
+    private_key_file = request.files['private_key'] 
+    file_decrypt = request.files['file_decrypt']
+    if not private_key_file or private_key_file.filename == '' or not file_decrypt or file_decrypt.filename == "":
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        private_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            private_key = file.read()
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file_decrypt:
+        file_decrypt.save(temp_file_decrypt.name)
+        with open(temp_file_decrypt.name, 'rb') as file2:
+            data_decrypt = file2.read()
+    global rsa
+    rsa = RivestShamirAdleman()
+    start_time = time.time()
+    decrypted_file_data = rsa.decrypt_file(data_decrypt, private_key)
+    path = "decrypted_" + file_decrypt.filename[10:]
+    with open(path, 'wb') as output_file:
+        output_file.write(decrypted_file_data)
+    end_time = time.time()
+    rsa.time = end_time - start_time
+    return send_file(path, as_attachment=True)
