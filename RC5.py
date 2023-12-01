@@ -13,6 +13,7 @@ class RC5:
         self.res = pseudo_rand[int(time()) % 44620].to_bytes(self.w // 8, byteorder='little')
         self.enc = None
         self.file = None
+        self.time = None
 
     def set_key(self, key):
         self.key = key
