@@ -8,6 +8,7 @@ import uuid
 import zipfile
 from werkzeug.utils import secure_filename
 from flask import Blueprint, jsonify, make_response, request, send_file
+from DSA import DigitalSignatureAlgorithm
 from LinearCongruentialGenerator import LinearCongruentialGenerator
 from MD5 import MD5
 from RC5 import RC5
@@ -21,6 +22,7 @@ generator = None
 md5 = None
 rc5 = None
 rsa = None
+dsa = None
 
 @app_blueprint.route('/generate_pseudo_random_sequence', methods=['POST'])
 def generate_pseudo_random_sequence():
@@ -387,3 +389,114 @@ def rsa_decrypt_file():
     end_time = time.time()
     rsa.time = end_time - start_time
     return send_file(path, as_attachment=True)
+
+## lab 5
+
+@app_blueprint.route('/dsa_generate_keys', methods=['POST'])
+def dsa_generate_keys():
+    try:
+        key_size = int(request.json.get('keySize', 2048))
+    except (ValueError, TypeError):
+        return errors.bad_request 
+    dsa = DigitalSignatureAlgorithm(key_size)
+    private_key, public_key = dsa.generate_keys()
+    with open("private_key.pem", "wb") as file:
+        file.write(private_key)
+    with open("public_key.pem", "wb") as file1:
+        file1.write(public_key)
+
+    response = make_response(zip_files("public_key.pem", "private_key.pem"))
+    response.headers["Content-Disposition"] = "attachment; filename=DSA_keys.zip"
+    response.headers["Content-Type"] = "application/zip"
+    return response
+
+@app_blueprint.route('/dsa_sign_text', methods=['POST'])
+def dsa_sign_text():
+    private_key_file = request.files['private_key'] 
+    text_sign = request.form.get('text_sign')
+    if not private_key_file or private_key_file.filename == '':
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        private_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            private_key = file.read()
+    dsa = DigitalSignatureAlgorithm()
+    signed_text = dsa.make_sign(private_key, text_sign.encode('utf-8'))
+    # path = "sign_" + file_sign.filename
+    with open("signed_text.txt", "w") as signed_text_out:
+        signed_text_out.write(signed_text)
+    return send_file("signed_text.txt", as_attachment=True, download_name="signed_text.txt")
+    # return jsonify({
+    #     'signed_text': signed_text,
+    # })
+
+@app_blueprint.route('/dsa_sign_file', methods=['POST'])
+def dsa_sign_file():
+    private_key_file = request.files['private_key'] 
+    file_sign = request.files['file_sign']
+    if not private_key_file or private_key_file.filename == '' or not file_sign or file_sign.filename == "":
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        private_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            private_key = file.read()
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file_sign:
+        file_sign.save(temp_file_sign.name)
+        with open(temp_file_sign.name, 'rb') as file2:
+            data_sign = file2.read()
+    dsa = DigitalSignatureAlgorithm()
+    signed_file = dsa.make_sign(private_key, data_sign)
+    with open("signed_file.txt", "w") as signed_file_out:
+        signed_file_out.write(signed_file)
+    return send_file("signed_file.txt", as_attachment=True, download_name="signed_file.txt")
+
+
+@app_blueprint.route('/dsa_verify_text', methods=['POST'])
+def verify_text():
+    public_key_file = request.files['public_key'] 
+    signature_file = request.files['signature'] 
+    text_sign = request.form.get('text_sign')
+
+    if not public_key_file or public_key_file.filename == '' or not signature_file or signature_file.filename == '':
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        public_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            public_key = file.read()
+    with tempfile.NamedTemporaryFile(delete=False) as temp_signature_file:
+        signature_file.save(temp_signature_file.name)
+        with open(temp_signature_file.name, 'r') as file:
+            signature = file.read()
+
+    dsa = DigitalSignatureAlgorithm()
+    signature_data = bytes.fromhex(signature)
+    result = dsa.check_sign(public_key, text_sign.encode('utf-8'), signature_data)
+    response = {'res': 'Signature is valid!' if result == 1 else 'Signature is invalid!'}
+    return jsonify(response)
+
+@app_blueprint.route('/dsa_verify_file', methods=['POST'])
+def verify_file():
+    public_key_file = request.files['public_key'] 
+    signature_file = request.files['signature'] 
+    file_sign = request.files['file_sign']
+
+    if not public_key_file or public_key_file.filename == '' or not signature_file or signature_file.filename == '':
+        return errors.bad_request 
+    with tempfile.NamedTemporaryFile(delete=False) as temp_key_file:
+        public_key_file.save(temp_key_file.name)
+        with open(temp_key_file.name, 'rb') as file:
+            public_key = file.read()
+    with tempfile.NamedTemporaryFile(delete=False) as temp_signature_file:
+        signature_file.save(temp_signature_file.name)
+        with open(temp_signature_file.name, 'r') as file:
+            signature = file.read()
+    with tempfile.NamedTemporaryFile(delete=False) as temp_file_sign:
+        file_sign.save(temp_file_sign.name)
+        with open(temp_file_sign.name, 'rb') as file2:
+            data_sign = file2.read()
+
+    dsa = DigitalSignatureAlgorithm()
+    signature_data = bytes.fromhex(signature)
+    result = dsa.check_sign(public_key, data_sign, signature_data)
+    response = {'res': 'Signature is valid!' if result == 1 else 'Signature is invalid!'}
+    return jsonify(response)
