@@ -13,3 +13,7 @@ if __name__ == '__main__':
 
     cov.stop()
     cov.report()
+
+
+# coverage run -m unittest discover -s tests -p 'test_*.py'
+# coverage report
